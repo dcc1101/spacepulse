@@ -1,0 +1,11 @@
+POST http://localhost:5000/api/bookings
+Content-Type: application/json
+Authorization: Bearer "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoyLCJyb2xlIjoic3R1ZGVudCIsImVtYWlsIjoic3R1ZGVudEBzY2hvb2wuZWR1IiwiaWF0IjoxNzkwMTAyODcxLCJleHAiOjE3OTAxMzE2NzF9.a6eLBoAYv9MYQESviF0J__JSuBMt5Ozf-6lMxUv-Pu8"
+
+{
+  "room_id": 1,
+  "booking_date": "2026-09-26",
+  "start_time": "14:00",
+  "end_time": "15:00",
+  "group_size": 3
+}
