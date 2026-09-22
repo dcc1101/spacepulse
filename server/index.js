@@ -130,14 +130,12 @@ app.post('/api/auth/login', async (req, res) => {
 
 // ================= ROOM & BOOKING ROUTES =================
 
-// GET all rooms
 app.get('/api/rooms', async (req, res) => {
   const { data, error } = await supabase.from('rooms').select('*');
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
-// POST create booking (Protected route)
 app.post('/api/bookings', authenticateToken, async (req, res) => {
   const { room_id, booking_date, start_time, end_time, group_size } = req.body;
   const reserved_by = req.user.user_id;
@@ -192,7 +190,6 @@ app.post('/api/bookings', authenticateToken, async (req, res) => {
   res.status(201).json(booking);
 });
 
-// GET current user's bookings with room details
 app.get('/api/bookings/my-bookings', authenticateToken, async (req, res) => {
   const user_id = req.user.user_id;
 
@@ -207,7 +204,6 @@ app.get('/api/bookings/my-bookings', authenticateToken, async (req, res) => {
   res.json(data);
 });
 
-// PATCH check-in
 app.patch('/api/bookings/:id/check-in', async (req, res) => {
   const { id } = req.params;
 
@@ -246,7 +242,6 @@ app.patch('/api/bookings/:id/check-in', async (req, res) => {
   res.json({ message: 'Checked in successfully', booking: updated });
 });
 
-// PATCH cancel
 app.patch('/api/bookings/:id/cancel', async (req, res) => {
   const { id } = req.params;
 
@@ -276,7 +271,6 @@ app.patch('/api/bookings/:id/cancel', async (req, res) => {
   res.json({ message: 'Booking cancelled', booking: updated });
 });
 
-// GET analytics
 app.get('/api/analytics/room-usage', async (req, res) => {
   const { data, error } = await supabase
     .from('bookings')
@@ -297,7 +291,6 @@ app.get('/api/analytics/room-usage', async (req, res) => {
   res.json(Object.values(usageCounts).sort((a, b) => b.count - a.count));
 });
 
-// GET recent audit logs
 app.get('/api/logs', authenticateToken, async (req, res) => {
   const { data, error } = await supabase
     .from('event_logs')
@@ -309,23 +302,20 @@ app.get('/api/logs', authenticateToken, async (req, res) => {
   res.json(data);
 });
 
-// Background Worker: Run every 60 seconds to expire no-shows past deadline
+// Background Cleanup Worker: runs every 30 seconds
 setInterval(async () => {
-  const now = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
 
-  const { data: expiredBookings, error } = await supabase
+  // 1. Expire confirmed bookings whose 15-minute deadline elapsed
+  const { data: expiredBookings, error: expireError } = await supabase
     .from('bookings')
     .update({ status: 'expired' })
     .eq('status', 'confirmed')
-    .lt('check_in_deadline', now)
+    .lt('check_in_deadline', nowIso)
     .select();
 
-  if (error) {
-    console.error('Auto-expire worker error:', error.message);
-    return;
-  }
-
-  if (expiredBookings && expiredBookings.length > 0) {
+  if (!expireError && expiredBookings && expiredBookings.length > 0) {
     for (const b of expiredBookings) {
       await logEvent(b.reserved_by, 'BOOKING_AUTO_EXPIRED', {
         booking_id: b.booking_id,
@@ -335,7 +325,36 @@ setInterval(async () => {
     }
     console.log(`Auto-expired ${expiredBookings.length} missed booking(s).`);
   }
-}, 60000);
+
+  // 2. Complete checked_in bookings whose end_time has passed
+  const { data: activeCheckedIn, error: activeError } = await supabase
+    .from('bookings')
+    .select('*')
+    .eq('status', 'checked_in');
+
+  if (!activeError && activeCheckedIn && activeCheckedIn.length > 0) {
+    for (const b of activeCheckedIn) {
+      const endDateTime = new Date(`${b.booking_date}T${b.end_time}`);
+      if (now >= endDateTime) {
+        const { data: completedBooking } = await supabase
+          .from('bookings')
+          .update({ status: 'completed' })
+          .eq('booking_id', b.booking_id)
+          .select()
+          .single();
+
+        if (completedBooking) {
+          await logEvent(b.reserved_by, 'BOOKING_COMPLETED', {
+            booking_id: b.booking_id,
+            room_id: b.room_id
+          });
+          io.emit('booking:completed', completedBooking);
+          console.log(`Auto-completed Booking #${b.booking_id} (End time: ${b.end_time} passed).`);
+        }
+      }
+    }
+  }
+}, 30000);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => console.log(`Server & Socket.IO running on port ${PORT}`));

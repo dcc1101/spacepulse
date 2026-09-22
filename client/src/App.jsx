@@ -97,20 +97,26 @@ export default function App() {
       fetchAuditLogs();
     });
 
+    socket.on('booking:completed', (data) => {
+      setRecentEvent(`Session Completed: Booking #${data.booking_id}`);
+      fetchMyBookings();
+      fetchAnalytics();
+      fetchAuditLogs();
+    });
+
     return () => {
       socket.off('booking:created');
       socket.off('booking:checked_in');
       socket.off('booking:cancelled');
+      socket.off('booking:completed');
     };
   }, [token]);
 
-  // Derive unique categories from room dataset
   const categories = useMemo(() => {
     const list = rooms.map((r) => r.category).filter(Boolean);
     return ['All', ...Array.from(new Set(list))];
   }, [rooms]);
 
-  // Filtered rooms
   const filteredRooms = useMemo(() => {
     return rooms.filter((room) => {
       const matchCategory = selectedCategory === 'All' || room.category === selectedCategory;
@@ -479,7 +485,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Filter Bar Controls */}
             <div className="bg-white border border-stone-200 rounded-lg p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-xs font-bold uppercase tracking-wider text-stone-500 mr-2">Category:</span>
@@ -513,7 +518,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Room Card Grid */}
             {filteredRooms.length === 0 ? (
               <div className="bg-white border border-stone-200 rounded-lg p-8 text-center text-sm text-stone-500">
                 No rooms match the selected criteria.
@@ -593,6 +597,8 @@ export default function App() {
                               ? 'bg-amber-50 text-amber-700 border-amber-200'
                               : b.status === 'checked_in'
                               ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : b.status === 'completed'
+                              ? 'bg-blue-50 text-blue-700 border-blue-200'
                               : 'bg-stone-100 text-stone-600 border-stone-200'
                           }`}
                         >
