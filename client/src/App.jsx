@@ -1065,7 +1065,7 @@ export default function App() {
                     <Tooltip
                       cursor={{ fill: '#f5f5f4' }}
                       contentStyle={{ fontSize: '12px', borderRadius: '6px', borderColor: '#d6d3d1' }}
-                      labelFormatter={(label) => `Week: ${label}`}
+                      labelFormatter={(label) => label}
                       formatter={(value) => [value, 'Bookings']}
                     />
                     <Bar dataKey="count" fill="#C41E3A" radius={[4, 4, 0, 0]} />

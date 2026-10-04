@@ -510,30 +510,25 @@ app.get('/api/analytics/weekly-bookings', async (req, res) => {
 
   if (error) return res.status(500).json({ error: error.message });
 
-  // Group by ISO week (e.g. "2026-W39")
-  function getISOWeek(dateStr) {
-    const date = new Date(dateStr);
-    const target = new Date(date.valueOf());
-    const dayNr = (date.getUTCDay() + 6) % 7;
-    target.setUTCDate(target.getUTCDate() - dayNr + 3);
-    const firstThursday = target.valueOf();
-    target.setUTCMonth(0, 1);
-    if (target.getUTCDay() !== 4) {
-      target.setUTCMonth(0, 1 + ((4 - target.getUTCDay() + 7) % 7));
-    }
-    const weekNumber = 1 + Math.ceil((firstThursday - target.valueOf()) / (7 * 24 * 3600 * 1000));
-    return `${date.getUTCFullYear()}-W${String(weekNumber).padStart(2, '0')}`;
-  }
+  // NEW: group by term-relative week ("Week 1" = the week starting on TERM_START_DATE).
+  // Set TERM_START_DATE (YYYY-MM-DD, ideally a Monday) in the environment variables.
+  const termStart = new Date(process.env.TERM_START_DATE || '2026-08-17');
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
   const weekCounts = {};
   data.forEach((b) => {
-    const week = getISOWeek(b.booking_date);
-    weekCounts[week] = (weekCounts[week] || 0) + 1;
+    const days = Math.floor((new Date(b.booking_date) - termStart) / MS_PER_DAY);
+    if (days < 0) return; // booking is before the term started, skip it
+    const weekNumber = Math.floor(days / 7) + 1;
+    weekCounts[weekNumber] = (weekCounts[weekNumber] || 0) + 1;
   });
 
-  const result = Object.entries(weekCounts)
-    .map(([week, count]) => ({ week, count }))
-    .sort((a, b) => (a.week > b.week ? 1 : -1));
+  // Fill in weeks with zero bookings so the chart has no gaps
+  const maxWeek = Math.max(0, ...Object.keys(weekCounts).map(Number));
+  const result = [];
+  for (let w = 1; w <= maxWeek; w++) {
+    result.push({ week: `Week ${w}`, count: weekCounts[w] || 0 });
+  }
 
   res.json(result);
 });
