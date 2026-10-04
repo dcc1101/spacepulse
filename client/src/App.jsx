@@ -71,6 +71,15 @@ export default function App() {
   const [groupSize, setGroupSize] = useState(2);
   const [bookingMsg, setBookingMsg] = useState(null);
 
+  // NEW: Room recommendation
+  const [recCategory, setRecCategory] = useState('');
+  const [recGroupSize, setRecGroupSize] = useState(2);
+  const [recommendations, setRecommendations] = useState(null); // null = not searched yet
+  const [recExact, setRecExact] = useState(true);
+  const [recDate, setRecDate] = useState('2026-09-25'); // NEW
+  const [recStart, setRecStart] = useState('09:00'); // NEW
+  const [recEnd, setRecEnd] = useState('10:00'); // NEW
+
   const fetchRooms = () => {
     fetch(`${API_URL}/api/rooms`)
       .then((res) => res.json())
@@ -313,6 +322,27 @@ export default function App() {
       }
     } catch {
       setVerifyMsg({ type: 'error', text: 'Could not reach backend server.' });
+    }
+  };
+
+  // NEW: ask the backend for best-fit rooms
+  const handleRecommend = async (e) => {
+    e.preventDefault();
+    const category = recCategory || categories[1]; // first real category if none picked
+    if (!category) return;
+    try {
+      const res = await fetch(
+        `${API_URL}/api/rooms/recommend?category=${encodeURIComponent(category)}&group_size=${recGroupSize}&date=${recDate}&start_time=${recStart}&end_time=${recEnd}`
+      );
+      const data = await res.json();
+      if (res.ok) {
+        setRecommendations(data.recommendations);
+        setRecExact(data.exact_match);
+      } else {
+        alert(data.error || 'Could not get recommendations');
+      }
+    } catch {
+      alert('Could not reach backend server.');
     }
   };
 
@@ -713,6 +743,131 @@ export default function App() {
               >
                 Refresh
               </button>
+            </div>
+
+            {/* NEW: Room recommendation panel */}
+            <div className="bg-white border border-stone-200 rounded-lg p-4 shadow-xs space-y-3">
+              <h3 className="text-sm font-bold text-stone-900 uppercase tracking-wide">Find a Room for Me</h3>
+              <form onSubmit={handleRecommend} className="flex flex-col md:flex-row md:flex-wrap md:items-end gap-3">
+                <div className="flex-1 min-w-[140px]">
+                  <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1">
+                    Room Type
+                  </label>
+                  <select
+                    value={recCategory}
+                    onChange={(e) => setRecCategory(e.target.value)}
+                    className="w-full p-2 rounded border border-stone-300 text-sm focus:outline-none focus:border-[#C41E3A]"
+                  >
+                    {categories
+                      .filter((c) => c !== 'All')
+                      .map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div className="w-full md:w-32">
+                  <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1">
+                    Group Size
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={recGroupSize}
+                    onChange={(e) => setRecGroupSize(e.target.value)}
+                    className="w-full p-2 rounded border border-stone-300 text-sm focus:outline-none focus:border-[#C41E3A]"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1">
+                    Date
+                  </label>
+                  <input
+                    type="date"
+                    value={recDate}
+                    onChange={(e) => setRecDate(e.target.value)}
+                    className="w-full p-2 rounded border border-stone-300 text-sm focus:outline-none focus:border-[#C41E3A]"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1">
+                    Start
+                  </label>
+                  <input
+                    type="time"
+                    value={recStart}
+                    onChange={(e) => setRecStart(e.target.value)}
+                    className="w-full p-2 rounded border border-stone-300 text-sm focus:outline-none focus:border-[#C41E3A]"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1">
+                    End
+                  </label>
+                  <input
+                    type="time"
+                    value={recEnd}
+                    onChange={(e) => setRecEnd(e.target.value)}
+                    className="w-full p-2 rounded border border-stone-300 text-sm focus:outline-none focus:border-[#C41E3A]"
+                    required
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="bg-[#C41E3A] hover:bg-[#A01830] text-white px-4 py-2 rounded text-xs font-semibold uppercase tracking-wider transition shadow"
+                >
+                  Find Best Fit
+                </button>
+              </form>
+
+              {recommendations !== null &&
+                (recommendations.length === 0 ? (
+                  <p className="text-xs text-stone-500">
+                    No available rooms of that type for a group of {recGroupSize} at that time. Try a different time
+                    or room type.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {!recExact && (
+                      <p className="text-xs text-amber-700">
+                        No exact match. Showing available larger rooms that still fit your group.
+                      </p>
+                    )}
+                    {recommendations.slice(0, 3).map((room, i) => (
+                      <div
+                        key={room.room_id}
+                        className="flex items-center justify-between border border-stone-200 rounded p-3"
+                      >
+                        <div>
+                          <p className="text-sm font-bold text-stone-900">
+                            {i === 0 && <span className="text-[#C41E3A] mr-1">Best fit:</span>}
+                            {room.room_name}
+                          </p>
+                          <p className="text-xs text-stone-600">
+                            {room.building} | {room.min_capacity} - {room.max_capacity} persons
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setSelectedRoom(room);
+                            setGroupSize(recGroupSize);
+                            setBookingDate(recDate); // NEW
+                            setStartTime(recStart); // NEW
+                            setEndTime(recEnd); // NEW
+                            setBookingMsg(null);
+                          }}
+                          className="bg-stone-800 hover:bg-[#C41E3A] text-white px-3 py-1.5 rounded text-xs font-semibold uppercase tracking-wider transition"
+                        >
+                          Reserve
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ))}
             </div>
 
             <div className="bg-white border border-stone-200 rounded-lg p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">

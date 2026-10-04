@@ -244,27 +244,58 @@ app.get('/api/rooms', async (req, res) => {
   res.json(data);
 });
 
-// Room recommendation — pass desired category + group size, get best-fit rooms back
+// Room recommendation — pass desired category + group size, get best-fit rooms back.
+// NEW: if date, start_time and end_time are also passed, rooms that already have an
+// overlapping confirmed/checked_in booking at that time are left out.
 app.get('/api/rooms/recommend', async (req, res) => {
-  const { category, group_size } = req.query;
+  const { category, group_size, date, start_time, end_time } = req.query;
   const size = parseInt(group_size, 10);
 
   if (!category || !size) {
     return res.status(400).json({ error: 'category and group_size query params are required' });
   }
 
-  const { data, error } = await supabase
-    .from('rooms')
-    .select('*')
-    .eq('category', category)
-    .eq('is_active', true)
-    .gte('max_capacity', size)
-    .lte('min_capacity', size)
-    .order('max_capacity', { ascending: true }); // smallest room that still fits first = best fit
+  const checkAvailability = Boolean(date && start_time && end_time);
+  if (checkAvailability && start_time >= end_time) {
+    return res.status(400).json({ error: 'End time must be after start time' });
+  }
 
-  if (error) return res.status(500).json({ error: error.message });
+  // NEW: removes rooms that are already booked during the requested time
+  async function filterAvailable(rooms) {
+    if (!checkAvailability || rooms.length === 0) return rooms;
 
-  if (data.length === 0) {
+    const { data: busy, error: busyError } = await supabase
+      .from('bookings')
+      .select('room_id')
+      .in('room_id', rooms.map((r) => r.room_id))
+      .eq('booking_date', date)
+      .in('status', ['confirmed', 'checked_in'])
+      .lt('start_time', end_time)
+      .gt('end_time', start_time);
+
+    if (busyError) throw new Error(busyError.message);
+
+    const busyIds = new Set(busy.map((b) => b.room_id));
+    return rooms.filter((r) => !busyIds.has(r.room_id));
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('category', category)
+      .eq('is_active', true)
+      .gte('max_capacity', size)
+      .lte('min_capacity', size)
+      .order('max_capacity', { ascending: true }); // smallest room that still fits first = best fit
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const exact = await filterAvailable(data);
+    if (exact.length > 0) {
+      return res.json({ exact_match: true, recommendations: exact });
+    }
+
     // Fallback: relax the min_capacity constraint, just find rooms that fit the group size
     const { data: fallback, error: fallbackError } = await supabase
       .from('rooms')
@@ -275,10 +306,12 @@ app.get('/api/rooms/recommend', async (req, res) => {
       .order('max_capacity', { ascending: true });
 
     if (fallbackError) return res.status(500).json({ error: fallbackError.message });
-    return res.json({ exact_match: false, recommendations: fallback });
-  }
 
-  res.json({ exact_match: true, recommendations: data });
+    const available = await filterAvailable(fallback);
+    res.json({ exact_match: false, recommendations: available });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/bookings', authenticateToken, async (req, res) => {
