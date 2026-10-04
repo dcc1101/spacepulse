@@ -1,23 +1,46 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { io } from 'socket.io-client';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'; // NEW
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  PieChart, // NEW
+  Pie, // NEW
+  Cell, // NEW
+  Legend // NEW
+} from 'recharts';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const socket = io(API_URL);
+
+// NEW: colors for the status donut
+const STATUS_COLORS = {
+  confirmed: '#a8a29e',
+  checked_in: '#16a34a',
+  completed: '#C41E3A',
+  cancelled: '#57534e',
+  expired: '#F59E0B'
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('rooms'); // 'rooms' | 'my-bookings' | 'analytics' | 'logs'
   const [rooms, setRooms] = useState([]);
   const [myBookings, setMyBookings] = useState([]);
   const [analytics, setAnalytics] = useState([]);
-  const [weeklyBookings, setWeeklyBookings] = useState([]); // NEW
+  const [weeklyBookings, setWeeklyBookings] = useState([]);
+  const [peakHours, setPeakHours] = useState([]); // NEW
+  const [statusData, setStatusData] = useState([]); // NEW
   const [auditLogs, setAuditLogs] = useState([]);
   const [token, setToken] = useState(localStorage.getItem('token') || '');
   const [user, setUser] = useState(() => {
     const stored = localStorage.getItem('user');
     return stored ? JSON.parse(stored) : null;
-  }); // NEW: { user_id, full_name, email, role }
-  const canSeeLogs = user?.role === 'admin' || user?.role === 'teacher'; // NEW
+  }); // { user_id, full_name, email, role }
+  const canSeeLogs = user?.role === 'admin' || user?.role === 'teacher';
 
   // Room Filter State
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -30,7 +53,7 @@ export default function App() {
   const [fullName, setFullName] = useState('');
   const [studentFacultyId, setStudentFacultyId] = useState('');
 
-  // Verification State (NEW)
+  // Verification State
   const [isVerifying, setIsVerifying] = useState(false);
   const [pendingEmail, setPendingEmail] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
@@ -72,12 +95,25 @@ export default function App() {
       .catch((err) => console.error('Error fetching analytics:', err));
   };
 
-  // NEW: fetches { week: "2026-W39", count: 12 } rows for the chart
+  // fetches { week: "2026-W39", count: 12 } rows for the chart
   const fetchWeeklyBookings = () => {
     fetch(`${API_URL}/api/analytics/weekly-bookings`)
       .then((res) => res.json())
       .then((data) => setWeeklyBookings(Array.isArray(data) ? data : []))
       .catch((err) => console.error('Error fetching weekly bookings:', err));
+  };
+
+  // NEW: peak hours + status breakdown
+  const fetchExtraAnalytics = () => {
+    fetch(`${API_URL}/api/analytics/peak-hours`)
+      .then((res) => res.json())
+      .then((data) => setPeakHours(Array.isArray(data) ? data : []))
+      .catch((err) => console.error('Error fetching peak hours:', err));
+
+    fetch(`${API_URL}/api/analytics/status-breakdown`)
+      .then((res) => res.json())
+      .then((data) => setStatusData(Array.isArray(data) ? data : []))
+      .catch((err) => console.error('Error fetching status breakdown:', err));
   };
 
   const fetchAuditLogs = () => {
@@ -93,7 +129,8 @@ export default function App() {
   useEffect(() => {
     fetchRooms();
     fetchAnalytics();
-    fetchWeeklyBookings(); // NEW
+    fetchWeeklyBookings();
+    fetchExtraAnalytics(); // NEW
     if (token) {
       fetchMyBookings();
       fetchAuditLogs();
@@ -103,7 +140,8 @@ export default function App() {
       setRecentEvent(`New Booking Confirmed: Room #${data.room_id} (${data.start_time} - ${data.end_time})`);
       fetchMyBookings();
       fetchAnalytics();
-      fetchWeeklyBookings(); // NEW
+      fetchWeeklyBookings();
+      fetchExtraAnalytics(); // NEW
       fetchAuditLogs();
     });
 
@@ -111,7 +149,8 @@ export default function App() {
       setRecentEvent(`Check-in Confirmed: Booking #${data.booking_id}`);
       fetchMyBookings();
       fetchAnalytics();
-      fetchWeeklyBookings(); // NEW
+      fetchWeeklyBookings();
+      fetchExtraAnalytics(); // NEW
       fetchAuditLogs();
     });
 
@@ -119,7 +158,8 @@ export default function App() {
       setRecentEvent(`Booking Cancelled/Expired: Booking #${data.booking_id}`);
       fetchMyBookings();
       fetchAnalytics();
-      fetchWeeklyBookings(); // NEW
+      fetchWeeklyBookings();
+      fetchExtraAnalytics(); // NEW
       fetchAuditLogs();
     });
 
@@ -127,7 +167,8 @@ export default function App() {
       setRecentEvent(`Session Completed: Booking #${data.booking_id}`);
       fetchMyBookings();
       fetchAnalytics();
-      fetchWeeklyBookings(); // NEW
+      fetchWeeklyBookings();
+      fetchExtraAnalytics(); // NEW
       fetchAuditLogs();
     });
 
@@ -139,14 +180,14 @@ export default function App() {
     };
   }, [token]);
 
-  // Resend-code cooldown ticker (NEW)
+  // Resend-code cooldown ticker
   useEffect(() => {
     if (resendCooldown <= 0) return;
     const t = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
     return () => clearTimeout(t);
   }, [resendCooldown]);
 
-  // NEW: safety net — if a student is somehow sitting on the logs tab, bounce them off it
+  // Safety net: if a student is somehow sitting on the logs tab, bounce them off it
   useEffect(() => {
     if (activeTab === 'logs' && !canSeeLogs) setActiveTab('rooms');
   }, [activeTab, canSeeLogs]);
@@ -176,15 +217,15 @@ export default function App() {
       if (res.ok && data.token) {
         setToken(data.token);
         localStorage.setItem('token', data.token);
-        setUser(data.user); // NEW
-        localStorage.setItem('user', JSON.stringify(data.user)); // NEW
+        setUser(data.user);
+        localStorage.setItem('user', JSON.stringify(data.user));
         fetchRooms();
         fetchMyBookings();
         fetchAnalytics();
-        // NEW: only fetch logs if this role is allowed to see them
+        // only fetch logs if this role is allowed to see them
         if (data.user?.role === 'admin' || data.user?.role === 'teacher') fetchAuditLogs();
       } else if (res.status === 403 && data.error?.toLowerCase().includes('not verified')) {
-        // NEW: account exists but isn't verified yet — send them to the code screen
+        // account exists but isn't verified yet, send them to the code screen
         setPendingEmail(email);
         setIsVerifying(true);
         setVerifyMsg(null);
@@ -212,7 +253,7 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        // CHANGED: instead of sending them to login, send them to the verification screen
+        // send them to the verification screen
         setPendingEmail(email);
         setIsRegistering(false);
         setIsVerifying(true);
@@ -226,7 +267,7 @@ export default function App() {
     }
   };
 
-  // NEW: submit the 6-digit code
+  // submit the 6-digit code
   const handleVerify = async (e) => {
     e.preventDefault();
     setVerifyMsg(null);
@@ -253,7 +294,7 @@ export default function App() {
     }
   };
 
-  // NEW: resend the code
+  // resend the code
   const handleResendCode = async () => {
     if (resendCooldown > 0) return;
     setVerifyMsg(null);
@@ -383,7 +424,8 @@ export default function App() {
                   onClick={() => {
                     setActiveTab('analytics');
                     fetchAnalytics();
-                    fetchWeeklyBookings(); // NEW
+                    fetchWeeklyBookings();
+                    fetchExtraAnalytics(); // NEW
                   }}
                   className={`px-3 py-1 text-xs font-semibold uppercase tracking-wider rounded ${
                     activeTab === 'analytics' ? 'bg-[#C41E3A] text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'
@@ -391,7 +433,7 @@ export default function App() {
                 >
                   Analytics
                 </button>
-                {canSeeLogs && ( // NEW: students never see this tab, server also blocks the route independently
+                {canSeeLogs && ( // students never see this tab, server also blocks the route independently
                   <button
                     onClick={() => {
                       setActiveTab('logs');
@@ -406,7 +448,7 @@ export default function App() {
                 )}
               </nav>
 
-              {user && ( // NEW: role badge
+              {user && ( // role badge
                 <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded bg-stone-800 text-white">
                   {user.role}
                 </span>
@@ -415,9 +457,9 @@ export default function App() {
               <button
                 onClick={() => {
                   setToken('');
-                  setUser(null); // NEW
+                  setUser(null);
                   localStorage.removeItem('token');
-                  localStorage.removeItem('user'); // NEW
+                  localStorage.removeItem('user');
                   setActiveTab('rooms');
                 }}
                 className="bg-stone-100 hover:bg-stone-200 text-stone-700 px-4 py-1.5 rounded border border-stone-300 text-xs font-semibold uppercase tracking-wider transition"
@@ -443,7 +485,7 @@ export default function App() {
         )}
 
         {!token && isVerifying ? (
-          /* ============== NEW: Verification Screen ============== */
+          /* ============== Verification Screen ============== */
           <div className="bg-white border border-stone-200 rounded-lg p-8 max-w-md mx-auto shadow-sm mt-10">
             <div className="border-b border-stone-200 pb-4 mb-6">
               <h2 className="text-xl font-bold text-stone-900">Verify Your Email</h2>
@@ -832,7 +874,8 @@ export default function App() {
               <button
                 onClick={() => {
                   fetchAnalytics();
-                  fetchWeeklyBookings(); // NEW
+                  fetchWeeklyBookings();
+                  fetchExtraAnalytics(); // NEW
                 }}
                 className="text-xs font-semibold uppercase tracking-wider bg-white hover:bg-stone-50 px-3 py-1.5 rounded border border-stone-300 text-stone-700 shadow-sm transition"
               >
@@ -840,7 +883,7 @@ export default function App() {
               </button>
             </div>
 
-            {/* NEW: Weekly booking frequency chart */}
+            {/* Weekly booking frequency chart */}
             <div className="bg-white border border-stone-200 rounded-lg p-5 shadow-xs">
               <h3 className="text-sm font-bold text-stone-900 uppercase tracking-wide mb-1">
                 Booking Frequency by Week
@@ -872,6 +915,65 @@ export default function App() {
                   </BarChart>
                 </ResponsiveContainer>
               )}
+            </div>
+
+            {/* NEW: Peak hours + status donut */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-white border border-stone-200 rounded-lg p-5 shadow-xs">
+                <h3 className="text-sm font-bold text-stone-900 uppercase tracking-wide mb-1">Peak Hours</h3>
+                <p className="text-xs text-stone-500 mb-4">Bookings by start time of day</p>
+                {peakHours.every((p) => p.bookings === 0) ? (
+                  <div className="text-center text-sm text-stone-500 py-10">No booking data yet.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={260}>
+                    <BarChart data={peakHours} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
+                      <XAxis
+                        dataKey="hour"
+                        tick={{ fontSize: 10, fill: '#78716c' }}
+                        tickLine={false}
+                        interval={0}
+                      />
+                      <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#78716c' }} tickLine={false} />
+                      <Tooltip
+                        cursor={{ fill: '#f5f5f4' }}
+                        contentStyle={{ fontSize: '12px', borderRadius: '6px', borderColor: '#d6d3d1' }}
+                        formatter={(value) => [value, 'Bookings']}
+                      />
+                      <Bar dataKey="bookings" fill="#C41E3A" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
+
+              <div className="bg-white border border-stone-200 rounded-lg p-5 shadow-xs">
+                <h3 className="text-sm font-bold text-stone-900 uppercase tracking-wide mb-1">Booking Status</h3>
+                <p className="text-xs text-stone-500 mb-4">Share of bookings by current status</p>
+                {statusData.length === 0 ? (
+                  <div className="text-center text-sm text-stone-500 py-10">No booking data yet.</div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={260}>
+                    <PieChart>
+                      <Pie
+                        data={statusData}
+                        dataKey="value"
+                        nameKey="name"
+                        innerRadius={60}
+                        outerRadius={95}
+                        paddingAngle={2}
+                      >
+                        {statusData.map((s) => (
+                          <Cell key={s.name} fill={STATUS_COLORS[s.name] || '#d6d3d1'} />
+                        ))}
+                      </Pie>
+                      <Tooltip
+                        contentStyle={{ fontSize: '12px', borderRadius: '6px', borderColor: '#d6d3d1' }}
+                      />
+                      <Legend wrapperStyle={{ fontSize: '12px' }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                )}
+              </div>
             </div>
 
             <div className="bg-white border border-stone-200 rounded-lg overflow-hidden shadow-xs">

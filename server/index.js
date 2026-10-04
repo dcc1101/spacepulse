@@ -475,6 +475,45 @@ app.get('/api/analytics/weekly-bookings', async (req, res) => {
   res.json(result);
 });
 
+// NEW: Peak hours — bookings per start hour (7AM to 9PM)
+app.get('/api/analytics/peak-hours', async (req, res) => {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('start_time');
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const counts = {};
+  data.forEach((b) => {
+    const h = parseInt(b.start_time.split(':')[0], 10);
+    counts[h] = (counts[h] || 0) + 1;
+  });
+
+  const result = [];
+  for (let h = 7; h <= 21; h++) {
+    const label = `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? 'AM' : 'PM'}`;
+    result.push({ hour: label, bookings: counts[h] || 0 });
+  }
+
+  res.json(result);
+});
+
+// NEW: Status breakdown — for the donut chart
+app.get('/api/analytics/status-breakdown', async (req, res) => {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('status');
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  const counts = {};
+  data.forEach((b) => {
+    counts[b.status] = (counts[b.status] || 0) + 1;
+  });
+
+  res.json(Object.entries(counts).map(([name, value]) => ({ name, value })));
+});
+
 // Audit logs — admin/teacher only, hidden from students
 app.get('/api/logs', authenticateToken, requireRole('admin', 'teacher'), async (req, res) => {
   const { data, error } = await supabase
