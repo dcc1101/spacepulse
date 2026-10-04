@@ -4,6 +4,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { Resend } = require('resend');
 require('dotenv').config();
 const supabase = require('./supabaseClient');
 
@@ -28,6 +29,9 @@ io.on('connection', (socket) => {
 });
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
+
+// Email client (Resend)
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Helper: Audit Log Function
 async function logEvent(userId, action, details = {}) {
@@ -59,8 +63,19 @@ function authenticateToken(req, res, next) {
   });
 }
 
+// Middleware: Restrict to specific roles (e.g. admin, teacher)
+function requireRole(...allowedRoles) {
+  return (req, res, next) => {
+    if (!req.user || !allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+    next();
+  };
+}
+
 // ================= AUTH ROUTES =================
 
+// Step 1: Register — creates unverified user, emails a 6-digit code
 app.post('/api/users/register', async (req, res) => {
   const { student_faculty_id, full_name, email, password, role } = req.body;
   if (!student_faculty_id || !full_name || !email || !password) {
@@ -70,6 +85,7 @@ app.post('/api/users/register', async (req, res) => {
   try {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
 
     const { data: user, error } = await supabase
       .from('users')
@@ -78,21 +94,108 @@ app.post('/api/users/register', async (req, res) => {
         full_name,
         email,
         password: hashedPassword,
-        role: role || 'student'
+        role: role || 'student',
+        is_verified: false,
+        verification_code: verificationCode
       })
       .select('user_id, student_faculty_id, full_name, email, role')
       .single();
 
     if (error) return res.status(500).json({ error: error.message });
 
+    // Send verification email
+    try {
+      await resend.emails.send({
+        from: 'SpacePulse <onboarding@resend.dev>',
+        to: email,
+        subject: 'Verify your SpacePulse account',
+        html: `<p>Hi ${full_name},</p>
+               <p>Your verification code is:</p>
+               <h2>${verificationCode}</h2>
+               <p>Enter this code in the app to activate your account.</p>`
+      });
+    } catch (mailErr) {
+      console.error('Email send error:', mailErr.message);
+      // Account is still created; verification can be resent later if you add that endpoint
+    }
+
     await logEvent(user.user_id, 'USER_REGISTERED', { email: user.email, role: user.role });
 
-    res.status(201).json(user);
+    res.status(201).json({ message: 'Registered. Check your email for a verification code.', user });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Step 2: Verify email with the code
+app.post('/api/users/verify', async (req, res) => {
+  const { email, code } = req.body;
+  if (!email || !code) return res.status(400).json({ error: 'Email and code required' });
+
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('user_id, verification_code, is_verified')
+    .eq('email', email)
+    .single();
+
+  if (error || !user) return res.status(404).json({ error: 'User not found' });
+  if (user.is_verified) return res.status(400).json({ error: 'Account already verified' });
+  if (user.verification_code !== code) return res.status(400).json({ error: 'Invalid verification code' });
+
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ is_verified: true, verification_code: null })
+    .eq('user_id', user.user_id);
+
+  if (updateError) return res.status(500).json({ error: updateError.message });
+
+  await logEvent(user.user_id, 'USER_VERIFIED', { email });
+
+  res.json({ message: 'Account verified successfully. You can now log in.' });
+});
+
+// Resend verification code (for users who missed/lost the original)
+app.post('/api/users/resend-code', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ error: 'Email required' });
+
+  const { data: user, error } = await supabase
+    .from('users')
+    .select('user_id, full_name, email, is_verified')
+    .eq('email', email)
+    .single();
+
+  if (error || !user) return res.status(404).json({ error: 'User not found' });
+  if (user.is_verified) return res.status(400).json({ error: 'Account already verified' });
+
+  const newCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ verification_code: newCode })
+    .eq('user_id', user.user_id);
+
+  if (updateError) return res.status(500).json({ error: updateError.message });
+
+  try {
+    await resend.emails.send({
+      from: 'SpacePulse <onboarding@resend.dev>',
+      to: user.email,
+      subject: 'Your new SpacePulse verification code',
+      html: `<p>Hi ${user.full_name},</p>
+             <p>Your new verification code is:</p>
+             <h2>${newCode}</h2>
+             <p>Enter this code in the app to activate your account.</p>`
+    });
+  } catch (mailErr) {
+    console.error('Email send error:', mailErr.message);
+    return res.status(500).json({ error: 'Failed to send email. Try again later.' });
+  }
+
+  res.json({ message: 'A new verification code has been sent to your email.' });
+});
+
+// Login — blocks unverified accounts, returns role so frontend can route correctly
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
@@ -108,6 +211,10 @@ app.post('/api/auth/login', async (req, res) => {
   const validPassword = await bcrypt.compare(password, user.password);
   if (!validPassword) return res.status(401).json({ error: 'Invalid email or password' });
 
+  if (!user.is_verified) {
+    return res.status(403).json({ error: 'Account not verified. Please check your email for the verification code.' });
+  }
+
   const token = jwt.sign(
     { user_id: user.user_id, role: user.role, email: user.email },
     JWT_SECRET,
@@ -116,6 +223,7 @@ app.post('/api/auth/login', async (req, res) => {
 
   await logEvent(user.user_id, 'USER_LOGIN', { email: user.email });
 
+  // role tells the frontend which dashboard to route to: 'student' | 'teacher' | 'admin'
   res.json({
     message: 'Login successful',
     token,
@@ -134,6 +242,43 @@ app.get('/api/rooms', async (req, res) => {
   const { data, error } = await supabase.from('rooms').select('*');
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
+});
+
+// Room recommendation — pass desired category + group size, get best-fit rooms back
+app.get('/api/rooms/recommend', async (req, res) => {
+  const { category, group_size } = req.query;
+  const size = parseInt(group_size, 10);
+
+  if (!category || !size) {
+    return res.status(400).json({ error: 'category and group_size query params are required' });
+  }
+
+  const { data, error } = await supabase
+    .from('rooms')
+    .select('*')
+    .eq('category', category)
+    .eq('is_active', true)
+    .gte('max_capacity', size)
+    .lte('min_capacity', size)
+    .order('max_capacity', { ascending: true }); // smallest room that still fits first = best fit
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  if (data.length === 0) {
+    // Fallback: relax the min_capacity constraint, just find rooms that fit the group size
+    const { data: fallback, error: fallbackError } = await supabase
+      .from('rooms')
+      .select('*')
+      .eq('category', category)
+      .eq('is_active', true)
+      .gte('max_capacity', size)
+      .order('max_capacity', { ascending: true });
+
+    if (fallbackError) return res.status(500).json({ error: fallbackError.message });
+    return res.json({ exact_match: false, recommendations: fallback });
+  }
+
+  res.json({ exact_match: true, recommendations: data });
 });
 
 app.post('/api/bookings', authenticateToken, async (req, res) => {
@@ -271,11 +416,13 @@ app.patch('/api/bookings/:id/cancel', async (req, res) => {
   res.json({ message: 'Booking cancelled', booking: updated });
 });
 
+// ================= ANALYTICS =================
+
 app.get('/api/analytics/room-usage', async (req, res) => {
   const { data, error } = await supabase
     .from('bookings')
     .select('room_id, rooms(room_name, building, category)')
-    .in('status', ['confirmed', 'checked_in']);
+    .in('status', ['confirmed', 'checked_in', 'completed']);
 
   if (error) return res.status(500).json({ error: error.message });
 
@@ -291,7 +438,45 @@ app.get('/api/analytics/room-usage', async (req, res) => {
   res.json(Object.values(usageCounts).sort((a, b) => b.count - a.count));
 });
 
-app.get('/api/logs', authenticateToken, async (req, res) => {
+// Weekly booking trends — for a line/bar graph of bookings per week
+app.get('/api/analytics/weekly-bookings', async (req, res) => {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('booking_date, status')
+    .in('status', ['confirmed', 'checked_in', 'completed']);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Group by ISO week (e.g. "2026-W39")
+  function getISOWeek(dateStr) {
+    const date = new Date(dateStr);
+    const target = new Date(date.valueOf());
+    const dayNr = (date.getUTCDay() + 6) % 7;
+    target.setUTCDate(target.getUTCDate() - dayNr + 3);
+    const firstThursday = target.valueOf();
+    target.setUTCMonth(0, 1);
+    if (target.getUTCDay() !== 4) {
+      target.setUTCMonth(0, 1 + ((4 - target.getUTCDay() + 7) % 7));
+    }
+    const weekNumber = 1 + Math.ceil((firstThursday - target.valueOf()) / (7 * 24 * 3600 * 1000));
+    return `${date.getUTCFullYear()}-W${String(weekNumber).padStart(2, '0')}`;
+  }
+
+  const weekCounts = {};
+  data.forEach((b) => {
+    const week = getISOWeek(b.booking_date);
+    weekCounts[week] = (weekCounts[week] || 0) + 1;
+  });
+
+  const result = Object.entries(weekCounts)
+    .map(([week, count]) => ({ week, count }))
+    .sort((a, b) => (a.week > b.week ? 1 : -1));
+
+  res.json(result);
+});
+
+// Audit logs — admin/teacher only, hidden from students
+app.get('/api/logs', authenticateToken, requireRole('admin', 'teacher'), async (req, res) => {
   const { data, error } = await supabase
     .from('event_logs')
     .select('log_id, action, details, created_at, users(full_name, email)')
@@ -302,12 +487,13 @@ app.get('/api/logs', authenticateToken, async (req, res) => {
   res.json(data);
 });
 
-// Background Cleanup Worker: runs every 30 seconds
+// ================= BACKGROUND CLEANUP WORKER =================
+// Runs every 30 seconds
 setInterval(async () => {
   const now = new Date();
   const nowIso = now.toISOString();
 
-  // 1. Expire confirmed bookings whose 15-minute deadline elapsed
+  // 1. Expire confirmed bookings whose 15-minute check-in deadline elapsed
   const { data: expiredBookings, error: expireError } = await supabase
     .from('bookings')
     .update({ status: 'expired' })
@@ -349,7 +535,39 @@ setInterval(async () => {
             room_id: b.room_id
           });
           io.emit('booking:completed', completedBooking);
-          console.log(`Auto-completed Booking #${b.booking_id} (End time: ${b.end_time} passed).`);
+          console.log(`Auto-completed Booking #${b.booking_id} (checked-in, end time passed).`);
+        }
+      }
+    }
+  }
+
+  // 3. NEW: bookings that were CONFIRMED (never checked in) but whose end_time has
+  //    already passed and the 15-min grace window hasn't caught them yet (e.g. a long
+  //    booking where check-in happened late in the grace window then was never used).
+  //    This is the fix for "my reservations" showing stale bookings — anything whose
+  //    end_time has passed is no longer active, regardless of check-in status.
+  const { data: staleConfirmed, error: staleError } = await supabase
+    .from('bookings')
+    .select('*')
+    .eq('status', 'confirmed');
+
+  if (!staleError && staleConfirmed && staleConfirmed.length > 0) {
+    for (const b of staleConfirmed) {
+      const endDateTime = new Date(`${b.booking_date}T${b.end_time}`);
+      if (now >= endDateTime) {
+        const { data: expired } = await supabase
+          .from('bookings')
+          .update({ status: 'expired' })
+          .eq('booking_id', b.booking_id)
+          .select()
+          .single();
+
+        if (expired) {
+          await logEvent(b.reserved_by, 'BOOKING_AUTO_EXPIRED_NO_SHOW', {
+            booking_id: b.booking_id,
+            room_id: b.room_id
+          });
+          io.emit('booking:cancelled', expired);
         }
       }
     }
