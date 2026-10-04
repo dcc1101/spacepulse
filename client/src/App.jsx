@@ -11,6 +11,11 @@ export default function App() {
   const [analytics, setAnalytics] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
   const [token, setToken] = useState(localStorage.getItem('token') || '');
+  const [user, setUser] = useState(() => {
+    const stored = localStorage.getItem('user');
+    return stored ? JSON.parse(stored) : null;
+  }); // NEW: { user_id, full_name, email, role }
+  const canSeeLogs = user?.role === 'admin' || user?.role === 'teacher'; // NEW
 
   // Room Filter State
   const [selectedCategory, setSelectedCategory] = useState('All');
@@ -126,6 +131,11 @@ export default function App() {
     return () => clearTimeout(t);
   }, [resendCooldown]);
 
+  // NEW: safety net — if a student is somehow sitting on the logs tab, bounce them off it
+  useEffect(() => {
+    if (activeTab === 'logs' && !canSeeLogs) setActiveTab('rooms');
+  }, [activeTab, canSeeLogs]);
+
   const categories = useMemo(() => {
     const list = rooms.map((r) => r.category).filter(Boolean);
     return ['All', ...Array.from(new Set(list))];
@@ -151,10 +161,13 @@ export default function App() {
       if (res.ok && data.token) {
         setToken(data.token);
         localStorage.setItem('token', data.token);
+        setUser(data.user); // NEW
+        localStorage.setItem('user', JSON.stringify(data.user)); // NEW
         fetchRooms();
         fetchMyBookings();
         fetchAnalytics();
-        fetchAuditLogs();
+        // NEW: only fetch logs if this role is allowed to see them
+        if (data.user?.role === 'admin' || data.user?.role === 'teacher') fetchAuditLogs();
       } else if (res.status === 403 && data.error?.toLowerCase().includes('not verified')) {
         // NEW: account exists but isn't verified yet — send them to the code screen
         setPendingEmail(email);
@@ -362,23 +375,34 @@ export default function App() {
                 >
                   Analytics
                 </button>
-                <button
-                  onClick={() => {
-                    setActiveTab('logs');
-                    fetchAuditLogs();
-                  }}
-                  className={`px-3 py-1 text-xs font-semibold uppercase tracking-wider rounded ${
-                    activeTab === 'logs' ? 'bg-[#C41E3A] text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'
-                  }`}
-                >
-                  Audit Logs
-                </button>
+                {canSeeLogs && ( // NEW: students never see this tab, server also blocks the route independently
+                  <button
+                    onClick={() => {
+                      setActiveTab('logs');
+                      fetchAuditLogs();
+                    }}
+                    className={`px-3 py-1 text-xs font-semibold uppercase tracking-wider rounded ${
+                      activeTab === 'logs' ? 'bg-[#C41E3A] text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'
+                    }`}
+                  >
+                    Audit Logs
+                  </button>
+                )}
               </nav>
+
+              {user && ( // NEW: role badge
+                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded bg-stone-800 text-white">
+                  {user.role}
+                </span>
+              )}
 
               <button
                 onClick={() => {
                   setToken('');
+                  setUser(null); // NEW
                   localStorage.removeItem('token');
+                  localStorage.removeItem('user'); // NEW
+                  setActiveTab('rooms');
                 }}
                 className="bg-stone-100 hover:bg-stone-200 text-stone-700 px-4 py-1.5 rounded border border-stone-300 text-xs font-semibold uppercase tracking-wider transition"
               >
@@ -826,7 +850,7 @@ export default function App() {
               </table>
             </div>
           </div>
-        ) : (
+        ) : canSeeLogs ? (
           /* Audit Logs Tab */
           <div className="space-y-4">
             <div className="flex justify-between items-end border-b border-stone-200 pb-3">
@@ -883,7 +907,7 @@ export default function App() {
               </table>
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* Reservation Modal */}
         {selectedRoom && (
