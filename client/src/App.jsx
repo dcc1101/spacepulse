@@ -349,7 +349,8 @@ export default function App() {
   const handleCheckIn = async (bookingId) => {
     try {
       const res = await fetch(`${API_URL}/api/bookings/${bookingId}/check-in`, {
-        method: 'PATCH'
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` } // NEW
       });
       const data = await res.json();
       if (!res.ok) alert(data.error || 'Failed to check in');
@@ -364,7 +365,8 @@ export default function App() {
   const handleCancelBooking = async (bookingId) => {
     try {
       const res = await fetch(`${API_URL}/api/bookings/${bookingId}/cancel`, {
-        method: 'PATCH'
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}` } // NEW
       });
       const data = await res.json();
       if (!res.ok) alert(data.error || 'Failed to cancel');

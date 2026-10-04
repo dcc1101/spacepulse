@@ -400,7 +400,7 @@ app.get('/api/bookings/my-bookings', authenticateToken, async (req, res) => {
   res.json(data);
 });
 
-app.patch('/api/bookings/:id/check-in', async (req, res) => {
+app.patch('/api/bookings/:id/check-in', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   const { data: booking, error: fetchError } = await supabase
@@ -410,6 +410,11 @@ app.patch('/api/bookings/:id/check-in', async (req, res) => {
     .single();
 
   if (fetchError || !booking) return res.status(404).json({ error: 'Booking not found' });
+
+  // NEW: only the owner (or an admin) can check in
+  if (booking.reserved_by !== req.user.user_id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'You can only check in to your own bookings' });
+  }
   if (booking.status !== 'confirmed') {
     return res.status(400).json({ error: `Cannot check in. Current status: ${booking.status}` });
   }
@@ -438,7 +443,7 @@ app.patch('/api/bookings/:id/check-in', async (req, res) => {
   res.json({ message: 'Checked in successfully', booking: updated });
 });
 
-app.patch('/api/bookings/:id/cancel', async (req, res) => {
+app.patch('/api/bookings/:id/cancel', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   const { data: booking } = await supabase
@@ -446,6 +451,13 @@ app.patch('/api/bookings/:id/cancel', async (req, res) => {
     .select('reserved_by, room_id')
     .eq('booking_id', id)
     .single();
+
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+
+  // NEW: only the owner (or an admin) can cancel
+  if (booking.reserved_by !== req.user.user_id && req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'You can only cancel your own bookings' });
+  }
 
   const { data: updated, error } = await supabase
     .from('bookings')
