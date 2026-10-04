@@ -4,7 +4,6 @@ const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { Resend } = require('resend');
 require('dotenv').config();
 const supabase = require('./supabaseClient');
 
@@ -30,8 +29,29 @@ io.on('connection', (socket) => {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_key';
 
-// Email client (Resend)
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Email helper (Brevo HTTP API). Sends over HTTPS, so Render's free tier does not block it.
+// Throws on failure so the callers' try/catch actually catches it.
+async function sendEmail({ to, subject, html }) {
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': process.env.BREVO_API_KEY,
+      'Content-Type': 'application/json',
+      accept: 'application/json'
+    },
+    body: JSON.stringify({
+      sender: { name: 'SpacePulse', email: process.env.BREVO_SENDER_EMAIL },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html
+    })
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Brevo ${res.status}: ${body}`);
+  }
+}
 
 // Helper: Audit Log Function
 async function logEvent(userId, action, details = {}) {
@@ -105,8 +125,7 @@ app.post('/api/users/register', async (req, res) => {
 
     // Send verification email
     try {
-      await resend.emails.send({
-        from: 'SpacePulse <onboarding@resend.dev>',
+      await sendEmail({
         to: email,
         subject: 'Verify your SpacePulse account',
         html: `<p>Hi ${full_name},</p>
@@ -178,8 +197,7 @@ app.post('/api/users/resend-code', async (req, res) => {
   if (updateError) return res.status(500).json({ error: updateError.message });
 
   try {
-    await resend.emails.send({
-      from: 'SpacePulse <onboarding@resend.dev>',
+    await sendEmail({
       to: user.email,
       subject: 'Your new SpacePulse verification code',
       html: `<p>Hi ${user.full_name},</p>
