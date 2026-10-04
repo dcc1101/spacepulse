@@ -23,6 +23,13 @@ export default function App() {
   const [fullName, setFullName] = useState('');
   const [studentFacultyId, setStudentFacultyId] = useState('');
 
+  // Verification State (NEW)
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [pendingEmail, setPendingEmail] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [verifyMsg, setVerifyMsg] = useState(null);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
   // Status & Notifications
   const [recentEvent, setRecentEvent] = useState(null);
 
@@ -112,6 +119,13 @@ export default function App() {
     };
   }, [token]);
 
+  // Resend-code cooldown ticker (NEW)
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
+
   const categories = useMemo(() => {
     const list = rooms.map((r) => r.category).filter(Boolean);
     return ['All', ...Array.from(new Set(list))];
@@ -141,6 +155,11 @@ export default function App() {
         fetchMyBookings();
         fetchAnalytics();
         fetchAuditLogs();
+      } else if (res.status === 403 && data.error?.toLowerCase().includes('not verified')) {
+        // NEW: account exists but isn't verified yet — send them to the code screen
+        setPendingEmail(email);
+        setIsVerifying(true);
+        setVerifyMsg(null);
       } else {
         alert(data.error || 'Login failed');
       }
@@ -165,13 +184,66 @@ export default function App() {
       });
       const data = await res.json();
       if (res.ok) {
-        alert('Registration complete. You may now sign in.');
+        // CHANGED: instead of sending them to login, send them to the verification screen
+        setPendingEmail(email);
         setIsRegistering(false);
+        setIsVerifying(true);
+        setVerificationCode('');
+        setVerifyMsg(null);
       } else {
         alert(data.error || 'Registration failed');
       }
     } catch {
       alert('Could not reach backend server.');
+    }
+  };
+
+  // NEW: submit the 6-digit code
+  const handleVerify = async (e) => {
+    e.preventDefault();
+    setVerifyMsg(null);
+    try {
+      const res = await fetch(`${API_URL}/api/users/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: pendingEmail, code: verificationCode })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setVerifyMsg({ type: 'success', text: 'Account verified! You can now sign in.' });
+        setTimeout(() => {
+          setIsVerifying(false);
+          setEmail(pendingEmail);
+          setPassword('');
+          setVerifyMsg(null);
+        }, 1200);
+      } else {
+        setVerifyMsg({ type: 'error', text: data.error || 'Verification failed.' });
+      }
+    } catch {
+      setVerifyMsg({ type: 'error', text: 'Could not reach backend server.' });
+    }
+  };
+
+  // NEW: resend the code
+  const handleResendCode = async () => {
+    if (resendCooldown > 0) return;
+    setVerifyMsg(null);
+    try {
+      const res = await fetch(`${API_URL}/api/users/resend-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: pendingEmail })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setVerifyMsg({ type: 'success', text: 'A new code was sent to your email.' });
+        setResendCooldown(30);
+      } else {
+        setVerifyMsg({ type: 'error', text: data.error || 'Could not resend code.' });
+      }
+    } catch {
+      setVerifyMsg({ type: 'error', text: 'Could not reach backend server.' });
     }
   };
 
@@ -330,7 +402,83 @@ export default function App() {
           </div>
         )}
 
-        {!token ? (
+        {!token && isVerifying ? (
+          /* ============== NEW: Verification Screen ============== */
+          <div className="bg-white border border-stone-200 rounded-lg p-8 max-w-md mx-auto shadow-sm mt-10">
+            <div className="border-b border-stone-200 pb-4 mb-6">
+              <h2 className="text-xl font-bold text-stone-900">Verify Your Email</h2>
+              <p className="text-xs text-stone-500 mt-1">
+                We sent a 6-digit code to <span className="font-semibold text-stone-700">{pendingEmail}</span>. Enter it
+                below to activate your account.
+              </p>
+            </div>
+
+            {verifyMsg && (
+              <div
+                className={`p-3 rounded text-xs font-medium border mb-4 ${
+                  verifyMsg.type === 'success'
+                    ? 'bg-stone-50 border-stone-400 text-stone-900'
+                    : 'bg-red-50 border-[#C41E3A] text-[#C41E3A]'
+                }`}
+              >
+                {verifyMsg.text}
+              </div>
+            )}
+
+            <form onSubmit={handleVerify} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-stone-600 uppercase tracking-wider mb-1">
+                  Verification Code
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={verificationCode}
+                  onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
+                  placeholder="123456"
+                  className="w-full p-2.5 rounded border border-stone-300 text-center text-lg tracking-[0.5em] font-semibold focus:outline-none focus:border-[#C41E3A]"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-[#C41E3A] hover:bg-[#A01830] text-white py-2.5 rounded font-semibold text-sm transition uppercase tracking-wider shadow"
+              >
+                Verify Account
+              </button>
+
+              <div className="text-center text-xs text-stone-500 pt-2 space-y-1">
+                <p>
+                  Didn't get a code?{' '}
+                  <button
+                    type="button"
+                    onClick={handleResendCode}
+                    disabled={resendCooldown > 0}
+                    className={`font-semibold ${
+                      resendCooldown > 0 ? 'text-stone-400 cursor-not-allowed' : 'text-[#C41E3A] hover:underline'
+                    }`}
+                  >
+                    {resendCooldown > 0 ? `Resend in ${resendCooldown}s` : 'Resend Code'}
+                  </button>
+                </p>
+                <p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsVerifying(false);
+                      setVerifyMsg(null);
+                    }}
+                    className="text-stone-500 hover:underline"
+                  >
+                    Back to Sign In
+                  </button>
+                </p>
+              </div>
+            </form>
+          </div>
+        ) : !token ? (
           <div className="bg-white border border-stone-200 rounded-lg p-8 max-w-md mx-auto shadow-sm mt-10">
             <div className="border-b border-stone-200 pb-4 mb-6">
               <h2 className="text-xl font-bold text-stone-900">
