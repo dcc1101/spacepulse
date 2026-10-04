@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { io } from 'socket.io-client';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'; // NEW
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const socket = io(API_URL);
@@ -9,6 +10,7 @@ export default function App() {
   const [rooms, setRooms] = useState([]);
   const [myBookings, setMyBookings] = useState([]);
   const [analytics, setAnalytics] = useState([]);
+  const [weeklyBookings, setWeeklyBookings] = useState([]); // NEW
   const [auditLogs, setAuditLogs] = useState([]);
   const [token, setToken] = useState(localStorage.getItem('token') || '');
   const [user, setUser] = useState(() => {
@@ -70,6 +72,14 @@ export default function App() {
       .catch((err) => console.error('Error fetching analytics:', err));
   };
 
+  // NEW: fetches { week: "2026-W39", count: 12 } rows for the chart
+  const fetchWeeklyBookings = () => {
+    fetch(`${API_URL}/api/analytics/weekly-bookings`)
+      .then((res) => res.json())
+      .then((data) => setWeeklyBookings(Array.isArray(data) ? data : []))
+      .catch((err) => console.error('Error fetching weekly bookings:', err));
+  };
+
   const fetchAuditLogs = () => {
     if (!token) return;
     fetch(`${API_URL}/api/logs`, {
@@ -83,6 +93,7 @@ export default function App() {
   useEffect(() => {
     fetchRooms();
     fetchAnalytics();
+    fetchWeeklyBookings(); // NEW
     if (token) {
       fetchMyBookings();
       fetchAuditLogs();
@@ -92,6 +103,7 @@ export default function App() {
       setRecentEvent(`New Booking Confirmed: Room #${data.room_id} (${data.start_time} - ${data.end_time})`);
       fetchMyBookings();
       fetchAnalytics();
+      fetchWeeklyBookings(); // NEW
       fetchAuditLogs();
     });
 
@@ -99,6 +111,7 @@ export default function App() {
       setRecentEvent(`Check-in Confirmed: Booking #${data.booking_id}`);
       fetchMyBookings();
       fetchAnalytics();
+      fetchWeeklyBookings(); // NEW
       fetchAuditLogs();
     });
 
@@ -106,6 +119,7 @@ export default function App() {
       setRecentEvent(`Booking Cancelled/Expired: Booking #${data.booking_id}`);
       fetchMyBookings();
       fetchAnalytics();
+      fetchWeeklyBookings(); // NEW
       fetchAuditLogs();
     });
 
@@ -113,6 +127,7 @@ export default function App() {
       setRecentEvent(`Session Completed: Booking #${data.booking_id}`);
       fetchMyBookings();
       fetchAnalytics();
+      fetchWeeklyBookings(); // NEW
       fetchAuditLogs();
     });
 
@@ -368,6 +383,7 @@ export default function App() {
                   onClick={() => {
                     setActiveTab('analytics');
                     fetchAnalytics();
+                    fetchWeeklyBookings(); // NEW
                   }}
                   className={`px-3 py-1 text-xs font-semibold uppercase tracking-wider rounded ${
                     activeTab === 'analytics' ? 'bg-[#C41E3A] text-white shadow-xs' : 'text-stone-600 hover:text-stone-900'
@@ -814,11 +830,48 @@ export default function App() {
                 <p className="text-xs text-stone-500 mt-0.5">Aggregated reservation metrics for campus study areas</p>
               </div>
               <button
-                onClick={fetchAnalytics}
+                onClick={() => {
+                  fetchAnalytics();
+                  fetchWeeklyBookings(); // NEW
+                }}
                 className="text-xs font-semibold uppercase tracking-wider bg-white hover:bg-stone-50 px-3 py-1.5 rounded border border-stone-300 text-stone-700 shadow-sm transition"
               >
                 Refresh
               </button>
+            </div>
+
+            {/* NEW: Weekly booking frequency chart */}
+            <div className="bg-white border border-stone-200 rounded-lg p-5 shadow-xs">
+              <h3 className="text-sm font-bold text-stone-900 uppercase tracking-wide mb-1">
+                Booking Frequency by Week
+              </h3>
+              <p className="text-xs text-stone-500 mb-4">
+                How often rooms are booked across each week of the school term
+              </p>
+              {weeklyBookings.length === 0 ? (
+                <div className="text-center text-sm text-stone-500 py-10">
+                  No booking data available yet to chart.
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                  <BarChart data={weeklyBookings} margin={{ top: 5, right: 10, left: -10, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e7e5e4" />
+                    <XAxis
+                      dataKey="week"
+                      tick={{ fontSize: 11, fill: '#78716c' }}
+                      tickLine={false}
+                    />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: '#78716c' }} tickLine={false} />
+                    <Tooltip
+                      cursor={{ fill: '#f5f5f4' }}
+                      contentStyle={{ fontSize: '12px', borderRadius: '6px', borderColor: '#d6d3d1' }}
+                      labelFormatter={(label) => `Week: ${label}`}
+                      formatter={(value) => [value, 'Bookings']}
+                    />
+                    <Bar dataKey="count" fill="#C41E3A" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </div>
 
             <div className="bg-white border border-stone-200 rounded-lg overflow-hidden shadow-xs">
